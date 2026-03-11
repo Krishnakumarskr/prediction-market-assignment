@@ -162,7 +162,7 @@ function AggregatedPriceRow({
 
       {/* Size with per-venue breakdown tooltip */}
       <Tooltip>
-        <TooltipTrigger asChild>
+        <TooltipTrigger>
           <span
             className="text-sm ml-auto cursor-default"
             style={{
@@ -258,10 +258,10 @@ export function OrderBookTable({ book, filter, onFilterChange, outcome, fills }:
   const spread = getSpread(book);
   const isYes = outcome === "YES";
 
+  const bestBid = book.bids[0];
+  const bestAsk = book.asks[0];
   const isBookCrossed =
-    book.bids.length > 0 &&
-    book.asks.length > 0 &&
-    book.bids[0].price >= book.asks[0].price;
+    bestBid != null && bestAsk != null && bestBid.price >= bestAsk.price;
 
   return (
     // h-full so it fills the grid cell; flex-col so sections stack and scroll independently
