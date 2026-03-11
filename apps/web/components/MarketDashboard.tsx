@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { MarketHeader } from "@/components/MarketHeader";
 import { VenueStatus } from "@/components/VenueStatus";
 import { OrderBookTable } from "@/components/OrderBookTable";
@@ -8,15 +8,32 @@ import { QuotePanel } from "@/components/QuotePanel";
 import { useKalshiBook } from "@/src/hooks/useKalshiBook";
 import { usePolymarketBook } from "@/src/hooks/usePolymarketBook";
 import { useCombinedBook } from "@/src/hooks/useCombinedBook";
-import type { Outcome, VenueFilter } from "@/src/types/orderbook";
+import { calculateFill } from "@/src/lib/quoteEngine";
+import type { FillResult, Outcome, VenueFilter } from "@/src/types/orderbook";
 
 export function MarketDashboard() {
   const [filter, setFilter] = useState<VenueFilter>("combined");
   const [outcome, setOutcome] = useState<Outcome>("YES");
+  const [budgetStr, setBudgetStr] = useState<string>("");
 
   const kalshiBook = useKalshiBook(outcome);
   const polymarketBook = usePolymarketBook(outcome);
   const combinedBook = useCombinedBook(kalshiBook, polymarketBook, filter);
+
+  const budget = useMemo(() => {
+    const n = parseFloat(budgetStr);
+    return isNaN(n) || n <= 0 ? 0 : n;
+  }, [budgetStr]);
+
+  const fillResult: FillResult | null = useMemo(() => {
+    if (budget === 0) return null;
+    return calculateFill(
+      combinedBook.asks,
+      kalshiBook.asks,
+      polymarketBook.asks,
+      budget
+    );
+  }, [budget, combinedBook.asks, kalshiBook.asks, polymarketBook.asks]);
 
   return (
     <div className="h-screen flex flex-col" style={{ backgroundColor: "#F6F3EE" }}>
@@ -41,6 +58,7 @@ export function MarketDashboard() {
             filter={filter}
             onFilterChange={setFilter}
             outcome={outcome}
+            fills={fillResult?.fills ?? null}
           />
         </div>
         {/* Quote panel: independently scrollable */}
@@ -51,6 +69,9 @@ export function MarketDashboard() {
             polymarketBook={polymarketBook}
             outcome={outcome}
             onOutcomeChange={setOutcome}
+            budgetStr={budgetStr}
+            onBudgetStrChange={setBudgetStr}
+            fillResult={fillResult}
           />
         </div>
       </div>

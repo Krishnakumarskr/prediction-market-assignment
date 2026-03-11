@@ -1,7 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { calculateFill } from "@/src/lib/quoteEngine";
+import { useMemo } from "react";
 import type { CombinedOrderBook, FillResult, Outcome, SingleVenueFill, VenueOrderBook } from "@/src/types/orderbook";
 
 interface QuotePanelProps {
@@ -10,6 +9,9 @@ interface QuotePanelProps {
   polymarketBook: VenueOrderBook;
   outcome: Outcome;
   onOutcomeChange: (o: Outcome) => void;
+  budgetStr: string;
+  onBudgetStrChange: (s: string) => void;
+  fillResult: FillResult | null;
 }
 
 const KALSHI_COLOR = "#1565C0";
@@ -321,27 +323,16 @@ function FillBreakdown({ result, outcome }: { result: FillResult; outcome: Outco
 
 export function QuotePanel({
   combinedBook,
-  kalshiBook,
-  polymarketBook,
   outcome,
   onOutcomeChange,
+  budgetStr,
+  onBudgetStrChange,
+  fillResult,
 }: QuotePanelProps) {
-  const [budgetStr, setBudgetStr] = useState<string>("");
-
   const budget = useMemo(() => {
     const n = parseFloat(budgetStr);
     return isNaN(n) || n <= 0 ? 0 : n;
   }, [budgetStr]);
-
-  const fillResult = useMemo(() => {
-    if (budget === 0) return null;
-    return calculateFill(
-      combinedBook.asks,
-      kalshiBook.asks,
-      polymarketBook.asks,
-      budget
-    );
-  }, [budget, combinedBook.asks, kalshiBook.asks, polymarketBook.asks]);
 
   const hasLiquidity = combinedBook.asks.length > 0;
   const isYes = outcome === "YES";
@@ -428,7 +419,7 @@ export function QuotePanel({
               step="any"
               placeholder="100"
               value={budgetStr}
-              onChange={(e) => setBudgetStr(e.target.value)}
+              onChange={(e) => onBudgetStrChange(e.target.value)}
               className="w-full pl-7 pr-3 py-2 text-sm rounded-lg outline-none transition-colors"
               style={{
                 fontFamily: "'DM Mono', monospace",

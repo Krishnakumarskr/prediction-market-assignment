@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef } from "react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { aggregateLevels, getMidPrice, getSpread } from "@/src/lib/orderbook";
-import type { AggregatedLevel, CombinedOrderBook, Outcome, VenueFilter } from "@/src/types/orderbook";
+import type { AggregatedLevel, CombinedOrderBook, FillLevel, Outcome, VenueFilter } from "@/src/types/orderbook";
 
 const KALSHI_COLOR = "#1565C0";
 const PM_COLOR = "#D4500C";
@@ -15,6 +15,7 @@ interface OrderBookTableProps {
   filter: VenueFilter;
   onFilterChange: (f: VenueFilter) => void;
   outcome: Outcome;
+  fills: FillLevel[] | null;
 }
 
 function formatPrice(p: number): string {
@@ -51,11 +52,13 @@ function AggregatedPriceRow({
   maxSize,
   side,
   prevSizeRef,
+  consumedFraction,
 }: {
   level: AggregatedLevel;
   maxSize: number;
   side: "bid" | "ask";
   prevSizeRef: React.MutableRefObject<Map<string, number>>;
+  consumedFraction: number; // 0 = untouched, 0–1 = partial, 1 = fully consumed
 }) {
   const rowRef = useRef<HTMLDivElement>(null);
   const key = `${side}-${level.price}`;
@@ -78,6 +81,9 @@ function AggregatedPriceRow({
     prevSizeRef.current.set(key, level.totalSize);
   });
 
+  const isConsumed = consumedFraction > 0;
+  const isPartial = isConsumed && consumedFraction < 0.999;
+
   const depthPct = maxSize > 0 ? (level.totalSize / maxSize) * 100 : 0;
   const hasBoth = level.kalshiSize > 0 && level.polySize > 0;
 
@@ -89,11 +95,31 @@ function AggregatedPriceRow({
     ? KALSHI_BG
     : PM_BG;
 
+  // Highlight tint overlay color based on dominant venue
+  const highlightColor = hasBoth
+    ? `linear-gradient(to right, rgba(21,101,192,0.10) ${kalshiFrac}%, rgba(212,80,12,0.10) ${kalshiFrac}%)`
+    : level.kalshiSize > 0
+    ? "rgba(21,101,192,0.10)"
+    : "rgba(212,80,12,0.10)";
+
+  // Left border color
+  const borderColor = hasBoth
+    ? KALSHI_COLOR
+    : level.kalshiSize > 0
+    ? KALSHI_COLOR
+    : PM_COLOR;
+
   return (
     <div
       ref={rowRef}
-      className="relative flex items-center px-3 py-[3px] transition-colors shrink-0"
-      style={{ height: 28, cursor: "default" }}
+      className="relative flex items-center py-[3px] transition-all duration-300 shrink-0"
+      style={{
+        height: 28,
+        cursor: "default",
+        paddingLeft: isConsumed ? "9px" : "12px", // compensate for 3px border
+        paddingRight: "12px",
+        borderLeft: isConsumed ? `3px solid ${borderColor}` : "3px solid transparent",
+      }}
       onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = "#F6F3EE"; }}
       onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = "transparent"; }}
     >
@@ -108,6 +134,14 @@ function AggregatedPriceRow({
         }}
       />
 
+      {/* Highlight tint overlay (consumed rows) */}
+      {isConsumed && (
+        <div
+          className="absolute inset-0 pointer-events-none transition-all duration-300"
+          style={{ background: highlightColor }}
+        />
+      )}
+
       {/* Venue indicator: single dot or split-color circle */}
       <VenueIndicator kalshiSize={level.kalshiSize} polySize={level.polySize} />
 
@@ -118,9 +152,11 @@ function AggregatedPriceRow({
           fontFamily: "'DM Mono', monospace",
           fontVariantNumeric: "tabular-nums",
           color: side === "bid" ? "#166534" : "#991B1B",
-          fontWeight: 500,
+          fontWeight: isConsumed ? 700 : 500,
+          transition: "font-weight 0.2s",
         }}
       >
+        {isPartial && <span style={{ opacity: 0.5, fontSize: "0.65rem", marginRight: 2 }}>~</span>}
         {formatPrice(level.price)}
       </span>
 
@@ -190,7 +226,7 @@ const FILTER_ACTIVE_STYLE: Record<VenueFilter, { bg: string; color: string; bord
   polymarket: { bg: "#FFF7ED", color: "#D4500C", border: "#FED7AA" },
 };
 
-export function OrderBookTable({ book, filter, onFilterChange, outcome }: OrderBookTableProps) {
+export function OrderBookTable({ book, filter, onFilterChange, outcome, fills }: OrderBookTableProps) {
   const prevSizeRef = useRef<Map<string, number>>(new Map());
 
   const aggBids = useMemo(() => aggregateLevels(book.bids), [book.bids]);
@@ -198,6 +234,25 @@ export function OrderBookTable({ book, filter, onFilterChange, outcome }: OrderB
 
   const maxBidSize = Math.max(...aggBids.map((b) => b.totalSize), 1);
   const maxAskSize = Math.max(...aggAsks.map((a) => a.totalSize), 1);
+
+  // Build a price → fraction-consumed map (0–1) from the fill list
+  const consumedPrices = useMemo((): Map<number, number> => {
+    if (!fills || fills.length === 0) return new Map();
+    // Sum filled sizes per price across all venues
+    const filledByPrice = new Map<number, number>();
+    for (const fill of fills) {
+      filledByPrice.set(fill.price, (filledByPrice.get(fill.price) ?? 0) + fill.size);
+    }
+    // Compare against aggregated level total sizes
+    const result = new Map<number, number>();
+    for (const level of aggAsks) {
+      const filled = filledByPrice.get(level.price);
+      if (filled != null) {
+        result.set(level.price, Math.min(filled / level.totalSize, 1));
+      }
+    }
+    return result;
+  }, [fills, aggAsks]);
 
   const mid = getMidPrice(book);
   const spread = getSpread(book);
@@ -308,6 +363,7 @@ export function OrderBookTable({ book, filter, onFilterChange, outcome }: OrderB
               maxSize={maxAskSize}
               side="ask"
               prevSizeRef={prevSizeRef}
+              consumedFraction={consumedPrices.get(level.price) ?? 0}
             />
           ))
         )}
@@ -379,6 +435,7 @@ export function OrderBookTable({ book, filter, onFilterChange, outcome }: OrderB
               maxSize={maxBidSize}
               side="bid"
               prevSizeRef={prevSizeRef}
+              consumedFraction={0}
             />
           ))
         )}
