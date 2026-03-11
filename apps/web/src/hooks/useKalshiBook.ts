@@ -97,7 +97,7 @@ export function useKalshiBook(outcome: Outcome = "YES"): VenueOrderBook {
             })
           );
           lastMessageTimeRef.current = Date.now();
-          setBook((prev) => ({ ...prev, status: "live" }));
+          setBook((prev) => ({ ...prev }));
         };
 
         ws.onmessage = (event: MessageEvent) => {
