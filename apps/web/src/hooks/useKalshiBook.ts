@@ -72,6 +72,16 @@ export function useKalshiBook(outcome: Outcome = "YES"): VenueOrderBook {
       const doConnect = () => {
         if (unmountedRef.current) return;
 
+        // Close any existing connection before opening a new one
+        if (wsRef.current) {
+          wsRef.current.onopen = null;
+          wsRef.current.onmessage = null;
+          wsRef.current.onclose = null;
+          wsRef.current.onerror = null;
+          wsRef.current.close();
+          wsRef.current = null;
+        }
+
         setBook((prev) => ({ ...prev, status: "connecting" }));
 
         let ws: WebSocket;
@@ -85,23 +95,23 @@ export function useKalshiBook(outcome: Outcome = "YES"): VenueOrderBook {
         wsRef.current = ws;
 
         ws.onopen = () => {
+          console.log('web socket open, sending orderbook subscription')
           if (unmountedRef.current) { ws.close(); return; }
           attemptRef.current = 0;
-          console.log('sending kalshi connection');
           ws.send(
             JSON.stringify({
               type: "subscribe",
               channel: "orderbook",
               tickers: [MARKET_CONFIG.kalshi.ticker],
-              initial_dump: true
+              initial_dump: true,
             })
           );
+          // Record connect time so stale detection can fire if no data arrives
           lastMessageTimeRef.current = Date.now();
-          setBook((prev) => ({ ...prev }));
+          // Stay in 'connecting' — only move to 'live' once real data arrives
         };
 
         ws.onmessage = (event: MessageEvent) => {
-          console.log(event);
           if (unmountedRef.current) return;
           lastMessageTimeRef.current = Date.now();
 
@@ -148,16 +158,29 @@ export function useKalshiBook(outcome: Outcome = "YES"): VenueOrderBook {
     reconnectTimeoutRef.current = setTimeout(() => connect(attempt), delay);
   };
 
-  // Stale detection
+  // Stale detection: fires if data stops arriving on a live connection,
+  // OR if the connection was accepted but never sent any orderbook data.
+  // Closes the socket so onclose → scheduleReconnect takes over.
   useEffect(() => {
     staleIntervalRef.current = setInterval(() => {
       if (
         lastMessageTimeRef.current > 0 &&
         Date.now() - lastMessageTimeRef.current > STALE_THRESHOLD_MS
       ) {
-        setBook((prev) =>
-          prev.status === "live" ? { ...prev, status: "stale" } : prev
-        );
+        setBook((prev) => {
+          if (prev.status === "live" || prev.status === "connecting") {
+            return { ...prev, status: "stale" };
+          }
+          return prev;
+        });
+        // Force a reconnect by closing the silent/stale socket
+        if (
+          wsRef.current &&
+          (wsRef.current.readyState === WebSocket.OPEN ||
+            wsRef.current.readyState === WebSocket.CONNECTING)
+        ) {
+          wsRef.current.close();
+        }
       }
     }, 5000);
 

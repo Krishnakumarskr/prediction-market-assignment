@@ -9,6 +9,7 @@ import { useKalshiBook } from "@/src/hooks/useKalshiBook";
 import { usePolymarketBook } from "@/src/hooks/usePolymarketBook";
 import { useCombinedBook } from "@/src/hooks/useCombinedBook";
 import { calculateFill } from "@/src/lib/quoteEngine";
+import { getMidPrice } from "@/src/lib/orderbook";
 import type { FillResult, Outcome, VenueFilter } from "@/src/types/orderbook";
 
 export function MarketDashboard() {
@@ -35,9 +36,15 @@ export function MarketDashboard() {
     );
   }, [budget, combinedBook.asks, kalshiBook.asks, polymarketBook.asks]);
 
+  // Derive both YES and NO mid prices from the active outcome's combined book.
+  // Binary market: YES% + NO% ≈ 100%, so the inactive side is (1 - activeMid).
+  const activeMid = getMidPrice(combinedBook);
+  const yesPrice = outcome === "YES" ? activeMid : (activeMid != null ? 1 - activeMid : null);
+  const noPrice  = outcome === "NO"  ? activeMid : (activeMid != null ? 1 - activeMid : null);
+
   return (
     <div className="h-screen flex flex-col" style={{ backgroundColor: "#F6F3EE" }}>
-      <MarketHeader outcome={outcome} />
+      <MarketHeader outcome={outcome} yesPrice={yesPrice} noPrice={noPrice} />
 
       {/* Venue status bar */}
       <div
