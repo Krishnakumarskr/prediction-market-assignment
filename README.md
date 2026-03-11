@@ -167,15 +167,6 @@ pnpm turbo dev --filter=web
 
 App runs at `http://localhost:3000`. No API keys required — the DFlow dev endpoint is open, and Polymarket's CLOB WebSocket is public.
 
-To point to a different market, edit two fields in [`apps/web/src/config/market.ts`](apps/web/src/config/market.ts):
-
-```ts
-export const MARKET_CONFIG = {
-  kalshi:      { ticker: "YOUR_KALSHI_TICKER" },
-  polymarket:  { slug: "your-polymarket-slug" },
-}
-```
-
 ---
 
 ## What I'd Improve With More Time
