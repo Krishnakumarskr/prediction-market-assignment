@@ -232,8 +232,17 @@ export function OrderBookTable({ book, filter, onFilterChange, outcome, fills }:
   const aggBids = useMemo(() => aggregateLevels(book.bids), [book.bids]);
   const aggAsks = useMemo(() => aggregateLevels(book.asks), [book.asks]);
 
-  const maxBidSize = Math.max(...aggBids.map((b) => b.totalSize), 1);
-  const maxAskSize = Math.max(...aggAsks.map((a) => a.totalSize), 1);
+  // Use the 90th-percentile size as the depth bar reference so extreme outlier
+  // levels (e.g. huge far-OTM quantities) don't crush all the visible bars.
+  const maxSize = useMemo(() => {
+    const sizes = [
+      ...aggBids.map((b) => b.totalSize),
+      ...aggAsks.map((a) => a.totalSize),
+    ].sort((a, b) => a - b);
+    if (sizes.length === 0) return 1;
+    const p90idx = Math.floor(sizes.length * 0.9);
+    return Math.max(sizes[p90idx] ?? sizes[sizes.length - 1] ?? 1, 1);
+  }, [aggBids, aggAsks]);
 
   // Build a price → fraction-consumed map (0–1) from the fill list
   const consumedPrices = useMemo((): Map<number, number> => {
@@ -360,7 +369,7 @@ export function OrderBookTable({ book, filter, onFilterChange, outcome, fills }:
             <AggregatedPriceRow
               key={`ask-${level.price}`}
               level={level}
-              maxSize={maxAskSize}
+              maxSize={maxSize}
               side="ask"
               prevSizeRef={prevSizeRef}
               consumedFraction={consumedPrices.get(level.price) ?? 0}
@@ -432,7 +441,7 @@ export function OrderBookTable({ book, filter, onFilterChange, outcome, fills }:
             <AggregatedPriceRow
               key={`bid-${level.price}`}
               level={level}
-              maxSize={maxBidSize}
+              maxSize={maxSize}
               side="bid"
               prevSizeRef={prevSizeRef}
               consumedFraction={0}

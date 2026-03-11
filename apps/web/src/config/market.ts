@@ -13,6 +13,6 @@ export const MARKET_CONFIG = {
 
 export const STALE_THRESHOLD_MS = 30_000;
 export const MAX_RECONNECT_DELAY_MS = 30_000;
-export const DFLOW_WS_URL = "wss://dev-prediction-markets-api.dflow.net/api/v1/ws";
+export const KALSHI_WS_URL = "wss://api.elections.kalshi.com/trade-api/ws/v2";
 export const POLYMARKET_WS_URL = "wss://ws-subscriptions-clob.polymarket.com/ws/market";
 export const POLYMARKET_GAMMA_API = "https://gamma-api.polymarket.com";

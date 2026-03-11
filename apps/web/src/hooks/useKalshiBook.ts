@@ -1,39 +1,41 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import {
-  DFLOW_WS_URL,
-  MARKET_CONFIG,
-  MAX_RECONNECT_DELAY_MS,
-  STALE_THRESHOLD_MS,
-} from "@/src/config/market";
-import { normalizeDFlowMessage } from "@/src/lib/normalizer";
+import { MAX_RECONNECT_DELAY_MS, STALE_THRESHOLD_MS } from "@/src/config/market";
+import { normalizeKalshiRawMaps } from "@/src/lib/normalizer";
 import { EMPTY_VENUE_BOOK } from "@/src/lib/orderbook";
-import type { DFlowOrderbookMessage, Outcome, VenueOrderBook } from "@/src/types/orderbook";
+import type {
+  KalshiSnapshotMessage,
+  Outcome,
+  VenueOrderBook,
+} from "@/src/types/orderbook";
 
+// The proxy URL — set NEXT_PUBLIC_KALSHI_PROXY_URL in apps/web/.env to override
+const PROXY_URL =
+  (typeof process !== "undefined" && process.env.NEXT_PUBLIC_KALSHI_PROXY_URL) ||
+  "ws://localhost:3001";
+
+/**
+ * Connects to the local Kalshi proxy (apps/kalshi-proxy) which signs + proxies
+ * the authenticated Kalshi WS. Raw dollar maps are kept in refs so outcome
+ * toggles instantly re-normalize without reconnecting.
+ */
 export function useKalshiBook(outcome: Outcome = "YES"): VenueOrderBook {
   const [book, setBook] = useState<VenueOrderBook>(EMPTY_VENUE_BOOK);
 
-  // Ref for use inside the WebSocket message handler (avoids closure staleness)
+  // Raw dollar maps keyed by price string, e.g. "0.2200"
+  const rawYesRef = useRef<Map<string, number>>(new Map());
+  const rawNoRef = useRef<Map<string, number>>(new Map());
+
+  // Always-current outcome for use inside WS event handlers
   const outcomeRef = useRef<Outcome>(outcome);
 
-  // Cache the last raw DFlow message so we can immediately re-normalize it when
-  // outcome toggles — no need to wait for the next WebSocket message from DFlow.
-  const lastRawMessageRef = useRef<DFlowOrderbookMessage | null>(null);
-
-  // When outcome changes: sync the ref AND immediately re-normalize the cached message
+  // Re-normalize immediately when outcome toggles — no reconnect needed
   useEffect(() => {
     outcomeRef.current = outcome;
-    if (lastRawMessageRef.current) {
-      const normalized = normalizeDFlowMessage(lastRawMessageRef.current, outcome);
-      setBook((prev) => ({
-        ...prev,
-        bids: normalized.bids,
-        asks: normalized.asks,
-      }));
-    } else {
-      // No data yet — clear any stale state from the previous outcome
-      setBook(EMPTY_VENUE_BOOK);
+    if (rawYesRef.current.size > 0 || rawNoRef.current.size > 0) {
+      const normalized = normalizeKalshiRawMaps(rawYesRef.current, rawNoRef.current, outcome);
+      setBook((prev) => ({ ...prev, bids: normalized.bids, asks: normalized.asks }));
     }
   }, [outcome]);
 
@@ -41,7 +43,6 @@ export function useKalshiBook(outcome: Outcome = "YES"): VenueOrderBook {
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const staleIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const lastMessageTimeRef = useRef<number>(0);
-  const attemptRef = useRef<number>(0);
   const unmountedRef = useRef<boolean>(false);
 
   const cleanup = useCallback(() => {
@@ -57,110 +58,96 @@ export function useKalshiBook(outcome: Outcome = "YES"): VenueOrderBook {
       clearTimeout(reconnectTimeoutRef.current);
       reconnectTimeoutRef.current = null;
     }
-    if (staleIntervalRef.current) {
-      clearInterval(staleIntervalRef.current);
-      staleIntervalRef.current = null;
-    }
+  }, []);
+
+  const scheduleReconnect = useCallback((attempt: number) => {
+    if (unmountedRef.current) return;
+    const delay = Math.min(1000 * 2 ** (attempt - 1), MAX_RECONNECT_DELAY_MS);
+    reconnectTimeoutRef.current = setTimeout(() => connect(attempt), delay);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const connect = useCallback(
     (attempt: number) => {
       if (unmountedRef.current) return;
 
-      const delay = attempt === 0 ? 0 : Math.min(1000 * 2 ** (attempt - 1), MAX_RECONNECT_DELAY_MS);
+      if (wsRef.current) {
+        wsRef.current.onopen = null;
+        wsRef.current.onmessage = null;
+        wsRef.current.onclose = null;
+        wsRef.current.onerror = null;
+        wsRef.current.close();
+        wsRef.current = null;
+      }
 
-      const doConnect = () => {
-        if (unmountedRef.current) return;
+      setBook((prev) => ({ ...prev, status: "connecting" }));
+      lastMessageTimeRef.current = Date.now();
 
-        // Close any existing connection before opening a new one
-        if (wsRef.current) {
-          wsRef.current.onopen = null;
-          wsRef.current.onmessage = null;
-          wsRef.current.onclose = null;
-          wsRef.current.onerror = null;
-          wsRef.current.close();
-          wsRef.current = null;
-        }
+      let ws: WebSocket;
+      try {
+        ws = new WebSocket(PROXY_URL);
+      } catch {
+        scheduleReconnect(attempt + 1);
+        return;
+      }
+      wsRef.current = ws;
 
-        setBook((prev) => ({ ...prev, status: "connecting" }));
-
-        let ws: WebSocket;
-        try {
-          ws = new WebSocket(DFLOW_WS_URL);
-        } catch {
-          scheduleReconnect(attempt);
-          return;
-        }
-
-        wsRef.current = ws;
-
-        ws.onopen = () => {
-          console.log('web socket open, sending orderbook subscription')
-          if (unmountedRef.current) { ws.close(); return; }
-          attemptRef.current = 0;
-          ws.send(
-            JSON.stringify({
-              type: "subscribe",
-              channel: "orderbook",
-              tickers: [MARKET_CONFIG.kalshi.ticker],
-              initial_dump: true,
-            })
-          );
-          // Record connect time so stale detection can fire if no data arrives
-          lastMessageTimeRef.current = Date.now();
-          // Stay in 'connecting' — only move to 'live' once real data arrives
-        };
-
-        ws.onmessage = (event: MessageEvent) => {
-          if (unmountedRef.current) return;
-          lastMessageTimeRef.current = Date.now();
-
-          try {
-            const parsed = JSON.parse(event.data as string) as DFlowOrderbookMessage;
-            if (parsed.channel === "orderbook" && parsed.type === "orderbook") {
-              // Cache raw message for instant re-normalization on outcome toggle
-              lastRawMessageRef.current = parsed;
-              const normalized = normalizeDFlowMessage(parsed, outcomeRef.current);
-              setBook({
-                bids: normalized.bids,
-                asks: normalized.asks,
-                lastUpdated: Date.now(),
-                status: "live",
-              });
-            }
-          } catch {
-            // ignore malformed messages
-          }
-        };
-
-        ws.onclose = () => {
-          if (unmountedRef.current) return;
-          setBook((prev) => ({ ...prev, status: "disconnected" }));
-          scheduleReconnect(attempt + 1);
-        };
-
-        ws.onerror = () => {
-          ws.close(); // triggers onclose for reconnect
-        };
+      ws.onopen = () => {
+        if (unmountedRef.current) { ws.close(); return; }
+        attempt = 0;
+        // Proxy streams all messages automatically — no subscribe needed from client
       };
 
-      if (delay === 0) {
-        doConnect();
-      } else {
-        reconnectTimeoutRef.current = setTimeout(doConnect, delay);
-      }
+      ws.onmessage = (event: MessageEvent<string>) => {
+        if (unmountedRef.current) return;
+        lastMessageTimeRef.current = Date.now();
+
+        try {
+          const parsed = JSON.parse(event.data) as KalshiSnapshotMessage | { type: string };
+
+          if (parsed.type === "orderbook_snapshot") {
+            const snap = (parsed as KalshiSnapshotMessage).msg;
+
+            rawYesRef.current = new Map(
+              (snap.yes_dollars_fp ?? []).map(([price, dollars]) => [price, parseFloat(dollars)])
+            );
+            rawNoRef.current = new Map(
+              (snap.no_dollars_fp ?? []).map(([price, dollars]) => [price, parseFloat(dollars)])
+            );
+
+            const normalized = normalizeKalshiRawMaps(
+              rawYesRef.current,
+              rawNoRef.current,
+              outcomeRef.current
+            );
+            setBook({
+              bids: normalized.bids,
+              asks: normalized.asks,
+              lastUpdated: Date.now(),
+              status: "live",
+            });
+          } else if (parsed.type === "close") {
+            setBook((prev) => ({ ...prev, status: "stale" }));
+          }
+        } catch {
+          // Ignore malformed messages
+        }
+      };
+
+      ws.onclose = () => {
+        if (unmountedRef.current) return;
+        setBook((prev) => ({ ...prev, status: "disconnected" }));
+        scheduleReconnect(attempt + 1);
+      };
+
+      ws.onerror = () => {
+        ws.close(); // triggers onclose → scheduleReconnect
+      };
     },
-    [] // eslint-disable-line react-hooks/exhaustive-deps
+    [scheduleReconnect]
   );
 
-  const scheduleReconnect = (attempt: number) => {
-    const delay = Math.min(1000 * 2 ** (attempt - 1), MAX_RECONNECT_DELAY_MS);
-    reconnectTimeoutRef.current = setTimeout(() => connect(attempt), delay);
-  };
-
-  // Stale detection: fires if data stops arriving on a live connection,
-  // OR if the connection was accepted but never sent any orderbook data.
-  // Closes the socket so onclose → scheduleReconnect takes over.
+  // Stale detection: if no message for STALE_THRESHOLD_MS, mark stale and reconnect
   useEffect(() => {
     staleIntervalRef.current = setInterval(() => {
       if (
@@ -173,7 +160,6 @@ export function useKalshiBook(outcome: Outcome = "YES"): VenueOrderBook {
           }
           return prev;
         });
-        // Force a reconnect by closing the silent/stale socket
         if (
           wsRef.current &&
           (wsRef.current.readyState === WebSocket.OPEN ||
@@ -187,12 +173,12 @@ export function useKalshiBook(outcome: Outcome = "YES"): VenueOrderBook {
     return () => {
       if (staleIntervalRef.current) clearInterval(staleIntervalRef.current);
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
     unmountedRef.current = false;
     connect(0);
-
     return () => {
       unmountedRef.current = true;
       cleanup();
@@ -201,3 +187,4 @@ export function useKalshiBook(outcome: Outcome = "YES"): VenueOrderBook {
 
   return book;
 }
+

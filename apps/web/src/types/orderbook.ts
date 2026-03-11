@@ -56,13 +56,37 @@ export interface FillResult {
   polymarketOnly: SingleVenueFill | null;
 }
 
-// Raw DFlow message
-export interface DFlowOrderbookMessage {
-  channel: string;
-  type: string;
+// Raw Kalshi snapshot message
+export interface KalshiSnapshotMsg {
   market_ticker: string;
-  yes_bids: Record<string, number>;
-  no_bids: Record<string, number>;
+  market_id: string;
+  /** [price_string, dollar_qty_string][] — e.g. [["0.0800", "300.00"]] */
+  yes_dollars_fp: [string, string][];
+  no_dollars_fp: [string, string][];
+}
+
+export interface KalshiSnapshotMessage {
+  type: "orderbook_snapshot";
+  sid: number;
+  seq: number;
+  msg: KalshiSnapshotMsg;
+}
+
+// Raw Kalshi delta message
+export interface KalshiDeltaMsg {
+  market_ticker: string;
+  price_dollars: string;
+  /** Signed change in dollar qty at this level */
+  delta_fp: string;
+  side: "yes" | "no";
+  ts: string;
+}
+
+export interface KalshiDeltaMessage {
+  type: "orderbook_delta";
+  sid: number;
+  seq: number;
+  msg: KalshiDeltaMsg;
 }
 
 // Raw Polymarket book snapshot
