@@ -1,14 +1,14 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { getMidPrice, getSpread } from "@/src/lib/orderbook";
-import type { CombinedOrderBook, Outcome, OrderLevel, VenueFilter } from "@/src/types/orderbook";
+import { aggregateLevels, getMidPrice, getSpread } from "@/src/lib/orderbook";
+import type { AggregatedLevel, CombinedOrderBook, Outcome, VenueFilter } from "@/src/types/orderbook";
 
-const VENUE_COLOR: Record<string, string> = {
-  kalshi: "#1565C0",
-  polymarket: "#D4500C",
-};
+const KALSHI_COLOR = "#1565C0";
+const PM_COLOR = "#D4500C";
+const KALSHI_BG = "#1565C014";
+const PM_BG = "#D4500C14";
 
 interface OrderBookTableProps {
   book: CombinedOrderBook;
@@ -27,24 +27,43 @@ function formatSize(s: number): string {
   return s.toFixed(0);
 }
 
-function PriceRow({
+function VenueIndicator({ kalshiSize, polySize }: { kalshiSize: number; polySize: number }) {
+  if (kalshiSize > 0 && polySize > 0) {
+    return (
+      <span
+        className="w-1.5 h-1.5 rounded-full shrink-0 mr-2"
+        style={{
+          background: `linear-gradient(to right, ${KALSHI_COLOR} 50%, ${PM_COLOR} 50%)`,
+        }}
+      />
+    );
+  }
+  return (
+    <span
+      className="w-1.5 h-1.5 rounded-full shrink-0 mr-2"
+      style={{ backgroundColor: kalshiSize > 0 ? KALSHI_COLOR : PM_COLOR }}
+    />
+  );
+}
+
+function AggregatedPriceRow({
   level,
   maxSize,
   side,
   prevSizeRef,
 }: {
-  level: OrderLevel;
+  level: AggregatedLevel;
   maxSize: number;
   side: "bid" | "ask";
   prevSizeRef: React.MutableRefObject<Map<string, number>>;
 }) {
   const rowRef = useRef<HTMLDivElement>(null);
-  const key = `${level.venue}-${side}-${level.price}`;
+  const key = `${side}-${level.price}`;
 
   useEffect(() => {
     const prev = prevSizeRef.current.get(key);
-    if (prev !== undefined && prev !== level.size && rowRef.current) {
-      const cls = level.size > prev ? "animate-flash-green" : "animate-flash-red";
+    if (prev !== undefined && prev !== level.totalSize && rowRef.current) {
+      const cls = level.totalSize > prev ? "animate-flash-green" : "animate-flash-red";
       rowRef.current.classList.remove("animate-flash-green", "animate-flash-red");
       void rowRef.current.offsetWidth;
       rowRef.current.classList.add(cls);
@@ -56,12 +75,19 @@ function PriceRow({
   });
 
   useEffect(() => {
-    prevSizeRef.current.set(key, level.size);
+    prevSizeRef.current.set(key, level.totalSize);
   });
 
-  const depthPct = maxSize > 0 ? (level.size / maxSize) * 100 : 0;
-  const color = VENUE_COLOR[level.venue];
-  const depthColor = level.venue === "kalshi" ? "#1565C014" : "#D4500C14";
+  const depthPct = maxSize > 0 ? (level.totalSize / maxSize) * 100 : 0;
+  const hasBoth = level.kalshiSize > 0 && level.polySize > 0;
+
+  // Split gradient: kalshi (blue) on the left portion, polymarket (orange) on the right
+  const kalshiFrac = level.totalSize > 0 ? (level.kalshiSize / level.totalSize) * 100 : 100;
+  const depthBackground = hasBoth
+    ? `linear-gradient(to right, ${KALSHI_BG} ${kalshiFrac}%, ${PM_BG} ${kalshiFrac}%)`
+    : level.kalshiSize > 0
+    ? KALSHI_BG
+    : PM_BG;
 
   return (
     <div
@@ -71,21 +97,19 @@ function PriceRow({
       onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = "#F6F3EE"; }}
       onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = "transparent"; }}
     >
-      {/* Depth bar */}
+      {/* Split depth bar */}
       <div
         className="absolute top-0 bottom-0 pointer-events-none"
         style={{
           [side === "bid" ? "right" : "left"]: 0,
           width: `${depthPct}%`,
-          backgroundColor: depthColor,
+          background: depthBackground,
+          transition: "width 0.2s ease",
         }}
       />
 
-      {/* Venue dot */}
-      <span
-        className="w-1.5 h-1.5 rounded-full shrink-0 mr-2"
-        style={{ backgroundColor: color }}
-      />
+      {/* Venue indicator: single dot or split-color circle */}
+      <VenueIndicator kalshiSize={level.kalshiSize} polySize={level.polySize} />
 
       {/* Price */}
       <span
@@ -100,9 +124,9 @@ function PriceRow({
         {formatPrice(level.price)}
       </span>
 
-      {/* Size with tooltip */}
+      {/* Size with per-venue breakdown tooltip */}
       <Tooltip>
-        <TooltipTrigger>
+        <TooltipTrigger asChild>
           <span
             className="text-sm ml-auto cursor-default"
             style={{
@@ -111,11 +135,43 @@ function PriceRow({
               color: "#7C796F",
             }}
           >
-            {formatSize(level.size)}
+            {formatSize(level.totalSize)}
           </span>
         </TooltipTrigger>
-        <TooltipContent side="left" className="text-xs" style={{ fontFamily: "'DM Mono', monospace" }}>
-          {level.size.toLocaleString()} shares · {level.venue === "kalshi" ? "Kalshi" : "Polymarket"}
+        <TooltipContent
+          side="left"
+          className="text-xs"
+          style={{ fontFamily: "'DM Mono', monospace", minWidth: 160 }}
+        >
+          <div className="space-y-1">
+            {level.kalshiSize > 0 && (
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex items-center gap-1.5">
+                  <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: KALSHI_COLOR }} />
+                  <span style={{ color: KALSHI_COLOR }}>Kalshi</span>
+                </div>
+                <span>{level.kalshiSize.toLocaleString()}</span>
+              </div>
+            )}
+            {level.polySize > 0 && (
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex items-center gap-1.5">
+                  <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: PM_COLOR }} />
+                  <span style={{ color: PM_COLOR }}>Polymarket</span>
+                </div>
+                <span>{level.polySize.toLocaleString()}</span>
+              </div>
+            )}
+            {hasBoth && (
+              <div
+                className="flex items-center justify-between gap-3 pt-1"
+                style={{ borderTop: "1px solid #E8E4DC" }}
+              >
+                <span style={{ color: "#7C796F" }}>Total</span>
+                <span>{level.totalSize.toLocaleString()}</span>
+              </div>
+            )}
+          </div>
         </TooltipContent>
       </Tooltip>
     </div>
@@ -137,15 +193,20 @@ const FILTER_ACTIVE_STYLE: Record<VenueFilter, { bg: string; color: string; bord
 export function OrderBookTable({ book, filter, onFilterChange, outcome }: OrderBookTableProps) {
   const prevSizeRef = useRef<Map<string, number>>(new Map());
 
-  const bids = book.bids;
-  const asks = book.asks;
+  const aggBids = useMemo(() => aggregateLevels(book.bids), [book.bids]);
+  const aggAsks = useMemo(() => aggregateLevels(book.asks), [book.asks]);
 
-  const maxBidSize = Math.max(...bids.map((b) => b.size), 1);
-  const maxAskSize = Math.max(...asks.map((a) => a.size), 1);
+  const maxBidSize = Math.max(...aggBids.map((b) => b.totalSize), 1);
+  const maxAskSize = Math.max(...aggAsks.map((a) => a.totalSize), 1);
 
   const mid = getMidPrice(book);
   const spread = getSpread(book);
   const isYes = outcome === "YES";
+
+  const isBookCrossed =
+    book.bids.length > 0 &&
+    book.asks.length > 0 &&
+    book.bids[0].price >= book.asks[0].price;
 
   return (
     // h-full so it fills the grid cell; flex-col so sections stack and scroll independently
@@ -230,10 +291,9 @@ export function OrderBookTable({ book, filter, onFilterChange, outcome }: OrderB
         ── Asks: flex-1 scrollable ──
         flex-col-reverse: lowest ask (index 0) appears at the bottom, nearest the spread.
         Overflow goes upward — scrolling reveals more expensive asks.
-        scroll-start at top = most expensive asks out of view (correct default).
       */}
       <div className="flex-1 min-h-0 overflow-y-auto ob-scroll flex flex-col-reverse">
-        {asks.length === 0 ? (
+        {aggAsks.length === 0 ? (
           <div
             className="px-3 py-4 text-center text-xs"
             style={{ fontFamily: "'DM Mono', monospace", color: "#A8A59F" }}
@@ -241,9 +301,9 @@ export function OrderBookTable({ book, filter, onFilterChange, outcome }: OrderB
             No asks
           </div>
         ) : (
-          asks.map((level) => (
-            <PriceRow
-              key={`ask-${level.venue}-${level.price}`}
+          aggAsks.map((level) => (
+            <AggregatedPriceRow
+              key={`ask-${level.price}`}
               level={level}
               maxSize={maxAskSize}
               side="ask"
@@ -258,7 +318,19 @@ export function OrderBookTable({ book, filter, onFilterChange, outcome }: OrderB
         className="flex items-center justify-center gap-3 py-2 border-y shrink-0"
         style={{ backgroundColor: "#FAFAF6", borderColor: "#E8E4DC" }}
       >
-        {mid != null ? (
+        {isBookCrossed ? (
+          <span
+            className="text-xs px-2 py-0.5 rounded"
+            style={{
+              fontFamily: "'DM Mono', monospace",
+              color: "#991B1B",
+              backgroundColor: "#FEE2E2",
+              border: "1px solid #FECACA",
+            }}
+          >
+            crossed market
+          </span>
+        ) : mid != null ? (
           <>
             <span
               className="text-xs"
@@ -292,7 +364,7 @@ export function OrderBookTable({ book, filter, onFilterChange, outcome }: OrderB
 
       {/* ── Bids: flex-1 scrollable ── */}
       <div className="flex-1 min-h-0 overflow-y-auto ob-scroll">
-        {bids.length === 0 ? (
+        {aggBids.length === 0 ? (
           <div
             className="px-3 py-4 text-center text-xs"
             style={{ fontFamily: "'DM Mono', monospace", color: "#A8A59F" }}
@@ -300,9 +372,9 @@ export function OrderBookTable({ book, filter, onFilterChange, outcome }: OrderB
             No bids
           </div>
         ) : (
-          bids.map((level) => (
-            <PriceRow
-              key={`bid-${level.venue}-${level.price}`}
+          aggBids.map((level) => (
+            <AggregatedPriceRow
+              key={`bid-${level.price}`}
               level={level}
               maxSize={maxBidSize}
               side="bid"

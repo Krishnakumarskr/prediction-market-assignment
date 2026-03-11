@@ -23,6 +23,13 @@ export interface CombinedOrderBook {
   polymarket: VenueOrderBook;
 }
 
+export interface AggregatedLevel {
+  price: number;
+  totalSize: number;
+  kalshiSize: number;
+  polySize: number;
+}
+
 export interface FillLevel {
   price: number;
   size: number;

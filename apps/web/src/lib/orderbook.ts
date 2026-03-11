@@ -1,4 +1,5 @@
 import type {
+  AggregatedLevel,
   CombinedOrderBook,
   OrderLevel,
   VenueFilter,
@@ -52,6 +53,30 @@ export function mergeOrderBooks(
   }
 
   return { bids, asks, kalshi, polymarket };
+}
+
+/**
+ * Aggregate a sorted OrderLevel[] by price, merging sizes from both venues.
+ * Preserves the existing sort order (bids desc, asks asc).
+ */
+export function aggregateLevels(levels: OrderLevel[]): AggregatedLevel[] {
+  const map = new Map<number, AggregatedLevel>();
+  for (const level of levels) {
+    const existing = map.get(level.price);
+    if (existing) {
+      existing.totalSize += level.size;
+      if (level.venue === "kalshi") existing.kalshiSize += level.size;
+      else existing.polySize += level.size;
+    } else {
+      map.set(level.price, {
+        price: level.price,
+        totalSize: level.size,
+        kalshiSize: level.venue === "kalshi" ? level.size : 0,
+        polySize: level.venue === "polymarket" ? level.size : 0,
+      });
+    }
+  }
+  return Array.from(map.values());
 }
 
 /** Get the mid price (average of best bid and best ask). */
