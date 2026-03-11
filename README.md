@@ -52,76 +52,6 @@ This app makes that arbitrage visible and actionable:
 
 ---
 
-## Data Sources & WebSocket Architecture
-
-### Kalshi — via DFlow WebSocket
-
-**Endpoint:** `wss://dev-prediction-markets-api.dflow.net/api/v1/ws`
-
-DFlow sends a full-book replacement on every update. No delta handling needed — each message replaces the entire book state.
-
-**Subscription message:**
-```json
-{
-  "type": "subscribe",
-  "channel": "orderbook",
-  "tickers": ["KXRECOGPERSONIRAN-26"],
-  "initial_dump": true
-}
-```
-
-**Message structure:**
-```json
-{
-  "channel": "orderbook",
-  "type": "orderbook",
-  "market_ticker": "KXRECOGPERSONIRAN-26",
-  "yes_bids": { "0.21": 1500, "0.20": 3200 },
-  "no_bids":  { "0.79": 800,  "0.80": 1200 }
-}
-```
-
-**Key insight:** `yes_bids` is not a pure bid book. It contains ALL YES-side orders — genuine buy bids below market AND limit sell orders at or above market. A naïve mapping would show bids at 80¢ alongside asks at 20¢, producing a negative spread.
-
-**Normalization algorithm:**
-1. Derive YES asks from `no_bids`: `ask_price = 1 − no_bid_price`
-2. Find `minYESAsk` = lowest derived ask price
-3. `yes_bids` entries **below** `minYESAsk` → genuine YES bids
-4. `yes_bids` entries **at or above** `minYESAsk` → limit sell orders → YES asks
-
-**NO outcome (symmetric):**
-- `no_bids` → NO bids directly (prices already in NO scale)
-- Genuine `yes_bids` (price < `minYESAsk`) → NO asks via `(1 − price)`
-- Stale `yes_bids` (price ≥ `minYESAsk`) are skipped to avoid nonsensically cheap NO asks
-
-**Outcome toggle without reconnect:** The raw DFlow message contains both `yes_bids` and `no_bids`, so the same WebSocket subscription serves both outcomes. When the user switches YES↔NO, the hook immediately re-normalizes the last cached raw message — no round-trip to the server.
-
-### Polymarket — via CLOB WebSocket
-
-**Phase 1 — Token discovery:**
-```
-GET https://gamma-api.polymarket.com/markets?slug=us-recognizes-reza-pahlavi-as-leader-of-iran-in2026
-```
-`clobTokenIds` is a JSON-stringified array: `'["token_yes_id", "token_no_id"]'`. YES = index 0, NO = index 1.
-
-**Phase 2 — WebSocket subscription:**
-```
-wss://ws-subscriptions-clob.polymarket.com/ws/market
-```
-```json
-{ "assets_ids": ["<token_id>"], "type": "market", "initial_dump": true, "level": 2 }
-```
-
-**Two event types handled:**
-- `book` — full snapshot, replaces local state entirely
-- `price_change` — delta updates: `size "0"` removes a level, otherwise upserts
-
-**Delta handling:** Price levels are keyed by their original price string (not float) to avoid floating-point drift. Levels are converted to floats only for display and sorting.
-
-**Outcome toggle with reconnect:** Since YES and NO are separate token IDs on Polymarket, switching outcome triggers a full reconnect with the new token ID. The book resets to empty while the new snapshot loads.
-
----
-
 ## Order Book Normalization & Merging
 
 ### Price Level Aggregation
@@ -192,26 +122,6 @@ A positive value means smart routing delivers a lower average cost per share.
 
 ---
 
-## "Walking the Book" Highlight
-
-When a user enters a budget, the order book visually shows which rows are consumed by the fill.
-
-**How it works:**
-1. `fillResult.fills` is an array of `FillLevel` objects, each with `{ price, size, cost, venue }`
-2. The fill sizes at each price are summed (across venues) and compared against the aggregated level's `totalSize`
-3. `consumedFraction = filledSize / totalSize` — a value from 0 to 1
-
-**Styling of consumed rows:**
-- **Left border:** 3px solid in the venue's color (blue for Kalshi, orange for Polymarket, blue for mixed)
-- **Background tint:** semi-transparent venue-colored overlay on top of the depth bar
-- **Bold text:** price and size become `font-weight: 700`
-- **Partial row indicator:** the last partially-filled row shows a `~` prefix on the price
-- **Smooth animation:** `transition-all duration-300` so the highlighted zone slides up or down as the budget changes
-
-The visual result: as a user types a budget, a "watermark" climbs up the ask side of the order book, showing exactly how deep into the book the order reaches.
-
----
-
 ## UI Features
 
 ### Order Book Table
@@ -245,37 +155,6 @@ Each venue shows a real-time connection indicator:
 
 ---
 
-## Project Structure
-
-```
-apps/web/
-├── app/
-│   ├── layout.tsx               # Google Fonts: Playfair Display, DM Sans, DM Mono
-│   ├── page.tsx                 # Renders MarketDashboard
-│   └── globals.css              # Light theme CSS variables, flash keyframes, scrollbar styles
-├── src/
-│   ├── config/
-│   │   └── market.ts            # Market tickers, WebSocket URLs, thresholds
-│   ├── types/
-│   │   └── orderbook.ts         # OrderLevel, AggregatedLevel, FillResult, VenueOrderBook, ...
-│   ├── lib/
-│   │   ├── normalizer.ts        # DFlow YES/NO normalization, Polymarket snapshot + delta
-│   │   ├── orderbook.ts         # mergeOrderBooks, aggregateLevels, getMidPrice, getSpread
-│   │   └── quoteEngine.ts       # sweepAsks, calculateFill, single-venue comparison
-│   └── hooks/
-│       ├── useKalshiBook.ts     # DFlow WebSocket, exponential backoff, stale detection
-│       ├── usePolymarketBook.ts # Polymarket token discovery + CLOB WebSocket
-│       └── useCombinedBook.ts   # useMemo wrapper over mergeOrderBooks
-└── components/
-    ├── MarketDashboard.tsx      # Root client component, owns all shared state
-    ├── MarketHeader.tsx         # Question title, outcome badge
-    ├── VenueStatus.tsx          # Per-venue connection status dot
-    ├── OrderBookTable.tsx       # Aggregated order book with walk highlight
-    └── QuotePanel.tsx           # Budget input, fill preview, venue comparison
-```
-
----
-
 ## Running Locally
 
 ```sh
@@ -296,6 +175,37 @@ export const MARKET_CONFIG = {
   polymarket:  { slug: "your-polymarket-slug" },
 }
 ```
+
+---
+
+## What I'd Improve With More Time
+
+### WebSocket & Data Pipeline
+
+**Order book update throttling**
+Right now every incoming WebSocket message triggers a React state update, which triggers a full re-render of the order book. In practice, Polymarket can fire 10–20 `price_change` deltas per second during active trading. Each delta individually produces a visible DOM update, which is wasted work. It can be throttled to 5 or 6 updates per second.
+
+
+
+**Reconnect jitter**
+The current exponential backoff (`Math.min(1000 * 2^attempt, 30s)`) is deterministic. If many clients disconnect simultaneously (e.g. a server restart), they all retry on the same schedule, creating a thundering herd. Adding randomized jitter — `delay * (0.5 + Math.random() * 0.5)` — spreads reconnect attempts across time.
+
+**DFlow heartbeat**
+Polymarket has an explicit `PING` → `PONG` keepalive. DFlow does not, so silent drops (firewall idle-connection timeouts, typically at 60–90s) could leave the hook in `live` status with a stale book. A proactive ping-style message or a tighter stale threshold would catch this earlier.
+
+### Price Precision & Aggregation
+
+
+**Tick size alignment**
+Kalshi and Polymarket may not share the same minimum price increment. Aggregating them as-is works today, but a proper implementation would re-bucket Polymarket levels to the nearest Kalshi tick before merging.
+
+### Quote Engine
+
+**Sell-side routing**
+The current engine only handles buying (sweeping asks). Routing across bids for a seller — finding the best venue split to exit a position — would use the same greedy sweep in reverse and would be a natural extension.
+
+**Slippage curve**
+Rather than a single budget → fill preview, computing the full curve (shares received at $10, $50, $100, $500, $1000) and rendering it as a chart would give traders an intuitive view of market depth and price impact before they commit a size.
 
 ---
 
