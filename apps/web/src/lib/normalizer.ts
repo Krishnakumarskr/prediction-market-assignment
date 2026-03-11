@@ -1,88 +1,89 @@
 import type {
-  DFlowOrderbookMessage,
+  KalshiDeltaMsg,
   OrderLevel,
+  Outcome,
   PolymarketBookEvent,
   PolymarketPriceChange,
 } from "@/src/types/orderbook";
 
-/** Normalize a DFlow full-book message for the YES or NO outcome.
+/**
+ * Convert Kalshi raw quantity maps to bids/asks for the given outcome.
  *
- *  DFlow structure:
- *   yes_bids — ALL YES-side orders: genuine buy bids (< market) AND limit sells (≥ market)
- *   no_bids  — people bidding to buy NO
+ * Despite the "_dollars_fp" name, the second value in each Kalshi snapshot entry
+ * is the SHARE/CONTRACT quantity (not a dollar amount). It matches the integer
+ * quantities in the companion "yes"/"no" arrays. The "_dollars" label refers to
+ * the price being formatted as dollars ("0.0100") rather than cents (1).
  *
- *  YES algorithm:
- *   1. Derive YES asks from no_bids: ask_price = 1 − no_bid_price
- *   2. Use the lowest derived ask as threshold (minYESAsk)
- *   3. yes_bids < threshold → genuine YES bids
- *      yes_bids ≥ threshold → limit sell orders → also YES asks
+ * For YES outcome:
+ *   bids = rawYes entries at face value (YES buyers)
+ *   asks = rawNo entries with price = 1 − no_price (NO buyers ≡ YES sellers)
  *
- *  NO algorithm (symmetric):
- *   1. Same minYESAsk derivation (used to filter stale yes_bids)
- *   2. no_bids → NO bids directly (prices already in NO scale)
- *   3. genuine yes_bids (price < minYESAsk) → NO asks via (1 − price)
- *   4. Stale yes_bids (price ≥ minYESAsk) produce nonsensically cheap NO asks → skip
+ * For NO outcome:
+ *   bids = rawNo entries at face value
+ *   asks = rawYes entries with price = 1 − yes_price
  */
-export function normalizeDFlowMessage(
-  msg: DFlowOrderbookMessage,
-  outcome: "YES" | "NO" = "YES"
-): {
-  bids: OrderLevel[];
-  asks: OrderLevel[];
-} {
-  // Shared step: derive YES asks from no_bids to establish minYESAsk threshold
-  const asksFromNoBids: OrderLevel[] = Object.entries(msg.no_bids ?? {}).map(
-    ([price, qty]) => ({
-      price: Math.round((1 - parseFloat(price)) * 10000) / 10000,
-      size: qty,
-      venue: "kalshi" as const,
-    })
-  );
-  asksFromNoBids.sort((a, b) => a.price - b.price);
-  const minYESAsk = asksFromNoBids[0]?.price ?? 1;
-
+export function normalizeKalshiRawMaps(
+  rawYes: Map<string, number>,
+  rawNo: Map<string, number>,
+  outcome: Outcome
+): { bids: OrderLevel[]; asks: OrderLevel[] } {
   if (outcome === "YES") {
     const bids: OrderLevel[] = [];
-    const asksFromYesBids: OrderLevel[] = [];
-
-    for (const [price, qty] of Object.entries(msg.yes_bids ?? {})) {
-      const priceFloat = parseFloat(price);
-      const level: OrderLevel = { price: priceFloat, size: qty, venue: "kalshi" };
-      if (priceFloat < minYESAsk) {
-        bids.push(level);
-      } else {
-        asksFromYesBids.push(level);
-      }
+    for (const [priceKey, qty] of rawYes) {
+      const price = parseFloat(priceKey);
+      if (price <= 0 || qty <= 0) continue;
+      bids.push({ price, size: qty, venue: "kalshi" });
     }
 
-    const asks = [...asksFromNoBids, ...asksFromYesBids];
+    const asks: OrderLevel[] = [];
+    for (const [priceKey, qty] of rawNo) {
+      const noPrice = parseFloat(priceKey);
+      if (noPrice <= 0 || qty <= 0) continue;
+      const yesAskPrice = Math.round((1 - noPrice) * 10000) / 10000;
+      asks.push({ price: yesAskPrice, size: qty, venue: "kalshi" });
+    }
+
     bids.sort((a, b) => b.price - a.price);
     asks.sort((a, b) => a.price - b.price);
     return { bids, asks };
   } else {
-    // NO outcome
-    // NO bids = no_bids directly (people bidding to buy NO at prices in NO scale)
-    const bids: OrderLevel[] = Object.entries(msg.no_bids ?? {}).map(
-      ([price, qty]) => ({
-        price: parseFloat(price),
-        size: qty,
-        venue: "kalshi" as const,
-      })
-    );
+    const bids: OrderLevel[] = [];
+    for (const [priceKey, qty] of rawNo) {
+      const price = parseFloat(priceKey);
+      if (price <= 0 || qty <= 0) continue;
+      bids.push({ price, size: qty, venue: "kalshi" });
+    }
 
-    // NO asks = genuine YES bids (price < minYESAsk) converted via (1 − price)
-    // Stale yes_bids (price ≥ minYESAsk) would become nonsensically cheap NO asks — skip
-    const asks: OrderLevel[] = Object.entries(msg.yes_bids ?? {})
-      .filter(([price]) => parseFloat(price) < minYESAsk)
-      .map(([price, qty]) => ({
-        price: Math.round((1 - parseFloat(price)) * 10000) / 10000,
-        size: qty,
-        venue: "kalshi" as const,
-      }));
+    const asks: OrderLevel[] = [];
+    for (const [priceKey, qty] of rawYes) {
+      const yesPrice = parseFloat(priceKey);
+      if (yesPrice <= 0 || qty <= 0) continue;
+      const noAskPrice = Math.round((1 - yesPrice) * 10000) / 10000;
+      asks.push({ price: noAskPrice, size: qty, venue: "kalshi" });
+    }
 
     bids.sort((a, b) => b.price - a.price);
     asks.sort((a, b) => a.price - b.price);
     return { bids, asks };
+  }
+}
+
+/**
+ * Apply a Kalshi orderbook_delta to the raw maps in-place.
+ * delta_fp is the signed change in dollar qty at the given price level.
+ */
+export function applyKalshiDelta(
+  rawYes: Map<string, number>,
+  rawNo: Map<string, number>,
+  msg: KalshiDeltaMsg
+): void {
+  const map = msg.side === "yes" ? rawYes : rawNo;
+  const current = map.get(msg.price_dollars) ?? 0;
+  const newValue = current + parseFloat(msg.delta_fp);
+  if (newValue <= 0) {
+    map.delete(msg.price_dollars);
+  } else {
+    map.set(msg.price_dollars, newValue);
   }
 }
 
