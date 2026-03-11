@@ -1,0 +1,165 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+@custom-variant dark (&:is(.dark *));
+
+/* ── Light theme: Editorial Finance ── */
+:root {
+    --background: #F6F3EE;
+    --foreground: #1A1814;
+    --card: #FFFFFF;
+    --card-foreground: #1A1814;
+    --popover: #FFFFFF;
+    --popover-foreground: #1A1814;
+    --primary: #1A1814;
+    --primary-foreground: #F6F3EE;
+    --secondary: #EEEBE3;
+    --secondary-foreground: #1A1814;
+    --muted: #EEEBE3;
+    --muted-foreground: #7C796F;
+    --accent: #E8E4DC;
+    --accent-foreground: #1A1814;
+    --destructive: #991B1B;
+    --border: #DDD9D0;
+    --input: #EEEBE3;
+    --ring: #1565C0;
+    --radius: 0.625rem;
+    --sidebar: #FFFFFF;
+    --sidebar-foreground: #1A1814;
+    --sidebar-primary: #1A1814;
+    --sidebar-primary-foreground: #F6F3EE;
+    --sidebar-accent: #EEEBE3;
+    --sidebar-accent-foreground: #1A1814;
+    --sidebar-border: #DDD9D0;
+    --sidebar-ring: #7C796F;
+}
+
+@theme inline {
+    --font-sans: 'DM Sans', system-ui, sans-serif;
+    --font-mono: 'DM Mono', 'Courier New', monospace;
+    --font-serif: 'Playfair Display', Georgia, serif;
+
+    --color-background: var(--background);
+    --color-foreground: var(--foreground);
+    --color-card: var(--card);
+    --color-card-foreground: var(--card-foreground);
+    --color-popover: var(--popover);
+    --color-popover-foreground: var(--popover-foreground);
+    --color-primary: var(--primary);
+    --color-primary-foreground: var(--primary-foreground);
+    --color-secondary: var(--secondary);
+    --color-secondary-foreground: var(--secondary-foreground);
+    --color-muted: var(--muted);
+    --color-muted-foreground: var(--muted-foreground);
+    --color-accent: var(--accent);
+    --color-accent-foreground: var(--accent-foreground);
+    --color-destructive: var(--destructive);
+    --color-border: var(--border);
+    --color-input: var(--input);
+    --color-ring: var(--ring);
+    --color-sidebar: var(--sidebar);
+    --color-sidebar-foreground: var(--sidebar-foreground);
+    --color-sidebar-primary: var(--sidebar-primary);
+    --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+    --color-sidebar-accent: var(--sidebar-accent);
+    --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+    --color-sidebar-border: var(--sidebar-border);
+    --color-sidebar-ring: var(--sidebar-ring);
+    --radius-sm: calc(var(--radius) * 0.6);
+    --radius-md: calc(var(--radius) * 0.8);
+    --radius-lg: var(--radius);
+    --radius-xl: calc(var(--radius) * 1.4);
+
+    /* Venue brand colors — light-optimized for readability on white */
+    --color-kalshi: #1565C0;
+    --color-kalshi-dim: #1565C014;
+    --color-polymarket: #D4500C;
+    --color-polymarket-dim: #D4500C14;
+    --color-surface: #FFFFFF;
+
+    /* Flash animations */
+    --animate-flash-green: flash-green 0.5s ease-out;
+    --animate-flash-red: flash-red 0.5s ease-out;
+}
+
+@keyframes flash-green {
+    0%   { background-color: rgba(22, 163, 74, 0.18); }
+    100% { background-color: transparent; }
+}
+
+@keyframes flash-red {
+    0%   { background-color: rgba(153, 27, 27, 0.14); }
+    100% { background-color: transparent; }
+}
+
+@keyframes pulse-glow {
+    0%, 100% { opacity: 1; box-shadow: 0 0 4px currentColor; }
+    50%       { opacity: 0.5; box-shadow: 0 0 8px currentColor; }
+}
+
+@layer base {
+    * {
+        @apply border-border outline-ring/50;
+    }
+    body {
+        @apply bg-background text-foreground;
+        font-family: 'DM Sans', system-ui, sans-serif;
+    }
+}
+
+@layer utilities {
+    .font-mono-nums {
+        font-family: 'DM Mono', 'Courier New', monospace;
+        font-variant-numeric: tabular-nums;
+    }
+    .font-serif-display {
+        font-family: 'Playfair Display', Georgia, serif;
+    }
+    .animate-flash-green {
+        animation: flash-green 0.5s ease-out;
+    }
+    .animate-flash-red {
+        animation: flash-red 0.5s ease-out;
+    }
+    .animate-pulse-glow {
+        animation: pulse-glow 2s ease-in-out infinite;
+    }
+    .text-kalshi {
+        color: #1565C0;
+    }
+    .text-polymarket {
+        color: #D4500C;
+    }
+    .bg-kalshi-dim {
+        background-color: #1565C014;
+    }
+    .bg-polymarket-dim {
+        background-color: #D4500C14;
+    }
+    .border-kalshi {
+        border-color: #1565C0;
+    }
+    .border-polymarket {
+        border-color: #D4500C;
+    }
+
+    /* Thin scrollbar for order book sections */
+    .ob-scroll {
+        scrollbar-width: thin;
+        scrollbar-color: #DDD9D0 transparent;
+    }
+    .ob-scroll::-webkit-scrollbar {
+        width: 3px;
+    }
+    .ob-scroll::-webkit-scrollbar-track {
+        background: transparent;
+    }
+    .ob-scroll::-webkit-scrollbar-thumb {
+        background-color: #DDD9D0;
+        border-radius: 2px;
+    }
+    .ob-scroll::-webkit-scrollbar-thumb:hover {
+        background-color: #C8C4BC;
+    }
+}

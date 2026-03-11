@@ -1,0 +1,18 @@
+export const MARKET_CONFIG = {
+  kalshi: {
+    ticker: "KXRECOGPERSONIRAN-26",
+    label: "Kalshi",
+  },
+  polymarket: {
+    slug: "us-recognizes-reza-pahlavi-as-leader-of-iran-in2026",
+    label: "Polymarket",
+  },
+  question: "Will the US recognize Reza Pahlavi as leader of Iran in 2026?",
+  outcome: "YES",
+} as const;
+
+export const STALE_THRESHOLD_MS = 30_000;
+export const MAX_RECONNECT_DELAY_MS = 30_000;
+export const DFLOW_WS_URL = "wss://dev-prediction-markets-api.dflow.net/api/v1/ws";
+export const POLYMARKET_WS_URL = "wss://ws-subscriptions-clob.polymarket.com/ws/market";
+export const POLYMARKET_GAMMA_API = "https://gamma-api.polymarket.com";
