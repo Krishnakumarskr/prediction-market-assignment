@@ -168,7 +168,7 @@ export function useKalshiBook(outcome: Outcome = "YES"): VenueOrderBook {
           wsRef.current.close();
         }
       }
-    }, 5000);
+    }, 50000);
 
     return () => {
       if (staleIntervalRef.current) clearInterval(staleIntervalRef.current);
