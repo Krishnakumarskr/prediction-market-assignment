@@ -44,6 +44,7 @@ const PORT = parseInt(process.env.PROXY_PORT ?? "3001", 10);
 const KALSHI_WS_URL = "wss://api.elections.kalshi.com/trade-api/ws/v2";
 const KALSHI_WS_PATH = "/trade-api/ws/v2";
 const MAX_RECONNECT_DELAY_MS = 30_000;
+const PING_INTERVAL_MS = 10_000; // match Kalshi's server-side heartbeat cadence
 
 if (!KEY_ID || !PRIVATE_KEY) {
   console.error(
@@ -52,11 +53,29 @@ if (!KEY_ID || !PRIVATE_KEY) {
   process.exit(1);
 }
 
-// ─── In-memory snapshot cache ──────────────────────────────────────────────
+// ─── In-memory orderbook state ─────────────────────────────────────────────
 
-// Stores the latest orderbook_snapshot raw string so newly connected browser
-// clients immediately receive the current book state without waiting for the
-// next Kalshi snapshot (which only arrives on subscribe).
+// Raw price → quantity maps, keyed by price string (e.g. "0.2200").
+// Populated from orderbook_snapshot, patched by each orderbook_delta.
+const rawYes = new Map(); // yes-side bids
+const rawNo = new Map();  // no-side bids
+
+let latestTicker = null;
+
+// Build a snapshot payload from current in-memory maps and broadcast it.
+// This is what browser clients always receive — never raw deltas.
+function buildSnapshotPayload() {
+  return JSON.stringify({
+    type: "orderbook_snapshot",
+    msg: {
+      market_ticker: latestTicker,
+      yes_dollars_fp: Array.from(rawYes.entries()).map(([price, qty]) => [price, qty.toFixed(2)]),
+      no_dollars_fp: Array.from(rawNo.entries()).map(([price, qty]) => [price, qty.toFixed(2)]),
+    },
+  });
+}
+
+// Cached snapshot string — replayed immediately to new browser connections.
 let latestSnapshot = null;
 
 // ─── Local WebSocket server ────────────────────────────────────────────────
@@ -123,6 +142,8 @@ function connectToKalshi(attempt) {
     },
   });
 
+  let pingInterval = null;
+
   ws.on("open", () => {
     console.log("[kalshi-proxy] Connected to Kalshi — subscribing to", TICKER);
     ws.send(
@@ -136,24 +157,65 @@ function connectToKalshi(attempt) {
         },
       })
     );
+
+    // Send a WebSocket ping frame every 10s so the connection stays alive.
+    // The ws library responds to server-initiated pings automatically;
+    // we also ping proactively to handle any intermediary idle timeouts.
+    pingInterval = setInterval(() => {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.ping("heartbeat");
+      }
+    }, PING_INTERVAL_MS);
+  });
+
+  ws.on("pong", () => {
+    // Server responded to our ping — connection is healthy
+    console.log('received pong')
   });
 
   ws.on("message", (raw) => {
-    
     const str = raw.toString();
-    console.log(str)
-    // Cache the snapshot so late-joining browser clients get it immediately
     try {
       const parsed = JSON.parse(str);
+
       if (parsed.type === "orderbook_snapshot") {
-        latestSnapshot = str;
-        console.log("[kalshi-proxy] Snapshot cached for", parsed.msg?.market_ticker);
+        // Rebuild in-memory maps from the full snapshot
+        const msg = parsed.msg;
+        latestTicker = msg.market_ticker;
+        rawYes.clear();
+        rawNo.clear();
+        for (const [price, qty] of (msg.yes_dollars_fp ?? [])) {
+          const q = parseFloat(qty);
+          if (q > 0) rawYes.set(price, q);
+        }
+        for (const [price, qty] of (msg.no_dollars_fp ?? [])) {
+          const q = parseFloat(qty);
+          if (q > 0) rawNo.set(price, q);
+        }
+        latestSnapshot = buildSnapshotPayload();
+        console.log("[kalshi-proxy] Snapshot cached for", latestTicker);
+        broadcast(latestSnapshot);
+
+      } else if (parsed.type === "orderbook_delta") {
+        // Patch the single changed level in-place
+        const msg = parsed.msg;
+        const map = msg.side === "yes" ? rawYes : rawNo;
+        const current = map.get(msg.price_dollars) ?? 0;
+        const next = current + parseFloat(msg.delta_fp);
+        if (next <= 0) {
+          map.delete(msg.price_dollars);
+        } else {
+          map.set(msg.price_dollars, next);
+        }
+        latestSnapshot = buildSnapshotPayload();
+        console.log('new data broadcasted!');
+        broadcast(latestSnapshot);
       }
     } catch { /* ignore parse errors */ }
-    broadcast(str);
   });
 
   ws.on("close", (code, reason) => {
+    clearInterval(pingInterval);
     console.warn(`[kalshi-proxy] Kalshi WS closed (${code} ${reason}) — reconnecting…`);
     broadcast(JSON.stringify({ type: "close" }));
     scheduleReconnect(attempt + 1);
