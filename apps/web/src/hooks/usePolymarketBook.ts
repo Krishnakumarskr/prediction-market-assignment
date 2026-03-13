@@ -167,9 +167,19 @@ export function usePolymarketBook(outcome: Outcome = "YES"): VenueOrderBook {
         lastMessageTimeRef.current > 0 &&
         Date.now() - lastMessageTimeRef.current > STALE_THRESHOLD_MS
       ) {
-        setBook((prev) =>
-          prev.status === "live" ? { ...prev, status: "stale" } : prev
-        );
+        setBook((prev) => {
+          if (prev.status === "live" || prev.status === "connecting") {
+            return { ...prev, status: "stale" };
+          }
+          return prev;
+        });
+        if (
+          wsRef.current &&
+          (wsRef.current.readyState === WebSocket.OPEN ||
+            wsRef.current.readyState === WebSocket.CONNECTING)
+        ) {
+          wsRef.current.close();
+        }
       }
     }, 5000);
 
